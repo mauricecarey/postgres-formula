@@ -5,6 +5,10 @@ include:
   - postgres.upstream
 {% endif %}
 
+{{ postgres.conf_dir }}:
+  file.directory:
+    - makedirs: True
+
 install-postgresql:
   pkg.installed:
     - name: {{ postgres.pkg }}
@@ -26,7 +30,7 @@ postgresql-initdb:
   cmd.run:
     - cwd: /
     - user: root
-    - name: service postgresql initdb
+    - name: {{ postgres.commands.initdb }}
     - unless: test -f {{ postgres.conf_dir }}/postgresql.conf
     - env:
       LC_ALL: C.UTF-8
@@ -37,24 +41,12 @@ run-postgresql:
     - enable: true
     - name: {{ postgres.service }}
     - require:
-      - pkg: {{ postgres.pkg }}
+      - pkg: install-postgresql
 
-{% if postgres.pkg_dev != False %}
-install-postgres-dev-package:
+{% if postgres.pkgs_extra %}
+install-postgres-extra:
   pkg.installed:
-    - name: {{ postgres.pkg_dev }}
-{% endif %}
-
-{% if postgres.pkg_libpq_dev != False %}
-install-postgres-libpq-dev:
-  pkg.installed:
-    - name: {{ postgres.pkg_libpq_dev }}
-{% endif %}
-
-{% if postgres.pkg_contrib != False %}
-install-postgres-contrib:
-  pkg.installed:
-    - name: {{ postgres.pkg_contrib }}
+    - pkgs: {{ postgres.pkgs_extra }}
 {% endif %}
 
 {% if postgres.postgresconf %}
@@ -68,7 +60,7 @@ postgresql-conf:
     - show_changes: True
     - append_if_not_found: True
     - watch_in:
-       - service: postgresql
+       - service: run-postgresql
 {% endif %}
 
 pg_hba.conf:
@@ -80,19 +72,32 @@ pg_hba.conf:
     - group: postgres
     - mode: 644
     - require:
-      - pkg: {{ postgres.pkg }}
+      - pkg: install-postgresql
     - watch_in:
-      - service: postgresql
+      - service: run-postgresql
 
 {% for name, user in postgres.users.items()  %}
 postgres-user-{{ name }}:
+{% if user.get('ensure', 'present') == 'present' %}
   postgres_user.present:
     - name: {{ name }}
     - createdb: {{ user.get('createdb', False) }}
+    - createroles: {{ user.get('createroles', False) }}
+    - createuser: {{ user.get('createuser', False) }}
+    - inherit: {{ user.get('inherit', True) }}
+    - replication: {{ user.get('replication', False) }}
     - password: {{ user.get('password', 'changethis') }}
     - user: {{ user.get('runas', 'postgres') }}
+    - superuser: {{ user.get('superuser', False) }}
     - require:
-      - service: {{ postgres.service }}
+      - service: run-postgresql
+{% else %}
+  postgres_user.absent:
+    - name: {{ name }}
+    - user: {{ user.get('runas', 'postgres') }}
+    - require:
+      - service: run-postgresql
+{% endif %}
 {% endfor%}
 
 {% for name, db in postgres.databases.items()  %}
@@ -107,10 +112,40 @@ postgres-db-{{ name }}:
     - owner: {{ db.get('owner') }}
     {% endif %}
     - user: {{ db.get('runas', 'postgres') }}
-    {% if db.get('user') %}
     - require:
+        - service: run-postgresql
+    {% if db.get('user') %}
         - postgres_user: postgres-user-{{ db.get('user') }}
     {% endif %}
+
+{% if db.schemas is defined %}
+{% for schema, schema_args in db.schemas.items() %}
+postgres-schema-{{ schema }}-for-db-{{ name }}:
+  postgres_schema.present:
+    - name: {{ schema }}
+    - dbname: {{ name }}
+{% if schema_args is not none %}
+{% for arg, value in schema_args.items() %}
+    - {{ arg }}: {{ value }}
+{% endfor %}
+{% endif %}
+{% endfor %}
+{% endif %}
+
+{% if db.extensions is defined %}
+{% for ext, ext_args in db.extensions.items() %}
+postgres-ext-{{ ext }}-for-db-{{ name }}:
+  postgres_extension.present:
+    - name: {{ ext }}
+    - user: {{ db.get('runas', 'postgres') }}
+    - maintenance_db: {{ name }}
+{% if ext_args is not none %}
+{% for arg, value in ext_args.items() %}
+    - {{ arg }}: {{ value }}
+{% endfor %}
+{% endif %}
+{% endfor %}
+{% endif %}
 {% endfor%}
 
 {% for name, directory in postgres.tablespaces.items()  %}
@@ -129,5 +164,5 @@ postgres-tablespace-{{ name }}:
     - name: {{ name }}
     - directory: {{ directory }}
     - require:
-      - service: {{ postgres.service }}
+      - service: run-postgresql
 {% endfor%}

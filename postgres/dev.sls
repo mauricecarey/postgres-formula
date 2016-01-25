@@ -1,14 +1,10 @@
 {% from "postgres/map.jinja" import postgres with context %}
 
-{% if postgres.use_upstream_repo %}
-include:
-  - postgres.upstream
-{% endif %}
-
-install-postgresql-client:
+{% if postgres.pkg_dev %}
+install-postgres-dev-package:
   pkg.installed:
-    - name: {{ postgres.pkg_client }}
-    - refresh: {{ postgres.use_upstream_repo }}
+    - name: {{ postgres.pkg_dev }}
+{% endif %}
 
 {% if postgres.pkg_libpq_dev %}
 install-postgres-libpq-dev:
